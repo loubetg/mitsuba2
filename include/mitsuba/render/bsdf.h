@@ -335,6 +335,13 @@ public:
            const Point2f &sample2,
            Mask active = true) const = 0;
 
+    // TODO: comment this
+    virtual std::pair<Vector<Float, 3>, Float>
+    sample_lobe(const BSDFContext &ctx,
+                const SurfaceInteraction3f &si,
+                Float sample1,
+                Mask active = true) const;
+
     /**
      * \brief Evaluate the BSDF f(wi, wo) or its adjoint version f^{*}(wi, wo)
      * and multiply by the cosine foreshortening term.
@@ -523,6 +530,7 @@ ENOKI_STRUCT_SUPPORT(mitsuba::BSDFSample3, wo, pdf, eta,
 
 ENOKI_CALL_SUPPORT_TEMPLATE_BEGIN(mitsuba::BSDF)
     ENOKI_CALL_SUPPORT_METHOD(sample)
+    ENOKI_CALL_SUPPORT_METHOD(sample_lobe)
     ENOKI_CALL_SUPPORT_METHOD(eval)
     ENOKI_CALL_SUPPORT_METHOD(eval_null_transmission)
     ENOKI_CALL_SUPPORT_METHOD(pdf)

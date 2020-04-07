@@ -102,6 +102,13 @@ public:
         return { bs, select(active && bs.pdf > 0.f, unpolarized<Spectrum>(value), 0.f) };
     }
 
+    std::pair<Vector<Float, 3>, Float> sample_lobe(const BSDFContext & /*ctx*/,
+                                                   const SurfaceInteraction3f & /*si*/,
+                                                   Float /*sample1*/,
+                                                   Mask /*active*/) const override {
+        return { Vector3f(0.f, 0.f, 1.f), math::Infinity<Float> };
+    }
+
     Spectrum eval(const BSDFContext &ctx, const SurfaceInteraction3f &si,
                   const Vector3f &wo, Mask active) const override {
         MTS_MASKED_FUNCTION(ProfilerPhase::BSDFEvaluate, active);

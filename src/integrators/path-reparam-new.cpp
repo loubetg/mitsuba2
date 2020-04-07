@@ -497,11 +497,10 @@ public:
                 Float component_sample = samplePair1D(active, sampler);
 
                 auto [sample_main_bs, bsdf_val_main_bs] = bsdf->sample(ctx, si, component_sample, samplePair2D(active, sampler), active);
-#if 0
-                // Mask convolution = Mask(m_use_convolution) && active
-                //     && sample_main_bs.sampled_roughness > m_conv_threshold;
-                Mask convolution = Mask(m_use_convolution) && active;
-#endif
+                auto [bs_lobe_dir, bs_lobe_kappa] = bsdf->sample_lobe(ctx, si, component_sample, active);
+
+                Mask convolution = Mask(m_use_convolution) && active
+                                   && bs_lobe_kappa < (2.f / sqr(m_conv_threshold)); // TODO threshold in kappa
 
                 if (any(has_flag(sample_main_bs.sampled_type, BSDFFlags::Delta)))
                     Log(Error, "This pluggin does not support perfectly specular reflections"
@@ -554,18 +553,13 @@ public:
                 Point3f discontinuity_bs =
                     estimate_discontinuity(rays_bs, sis_bs, active);
 #else
-                // TODO twick this: make the kernel smaller than the BSDF lobe to reduce noise in render
-                float kernel_lobe_ratio = 2.f;
-                // Prevent the kernel from becoming too big (e.g. diffuse BSDF)
-                Float kappa_bs = max(kernel_lobe_ratio * 2.f / sqr(detach(sample_main_bs.sampled_roughness)), 100);
-                // Float kappa_bs = 0.2f * m_kappa_conv;
+                Float kappa_bs      = select(convolution, m_kappa_conv, bs_lobe_kappa);
+                Vector3f sample_dir = select(convolution, sample_main_bs.wo, bs_lobe_dir);
+                Ray ray_bs = si.spawn_ray(si.to_world(sample_dir));
 
-                // TODO: try to make kappa depend of the sample_main_bs.pdf (if pdf is low, then kernel should be tighter)
-
-                Ray ray_bs = si.spawn_ray(si.to_world(sample_main_bs.wo));
                 SurfaceInteraction3f si_occluder = scene->ray_occluder(ray_bs, kappa_bs, active);
                 si_occluder.compute_differentiable_shape_position(active);
-                Mask use_reparam_bs = active && si_occluder.is_valid() && neq(si_occluder.shape, nullptr); // TODO remove last part
+                Mask use_reparam_bs = active && si_occluder.is_valid();
                 Vector3f discontinuity_bs = si_occluder.p;
                 // cuda_eval(); std::cout << "test 02" << std::endl;
 #endif
@@ -588,9 +582,11 @@ public:
                 sample_bs.wo = ds_bs[0]; // Reuse the first one, could be any of them
 #else
                 // Sampled offset direction (see eq 18)
-                sample_bs.wo = frame_main_bs.to_world(
-                    warp::square_to_von_mises_fisher<Float>(
-                        sample2D(active, sampler), kappa_bs));
+                auto tmp_samples = sample2D(active, sampler);
+                sample_bs.wo = select(convolution,
+                    frame_main_bs.to_world(warp::square_to_von_mises_fisher<Float>(tmp_samples, kappa_bs)),
+                    bsdf->sample(ctx, si, component_sample, tmp_samples, convolution).first.wo
+                );
 #endif
 
                 // Apply the differentiable rotation
@@ -613,9 +609,6 @@ public:
                 // correction term for the convolution (otherwise less energy at grazing angles)
                 Float cosangle = sample_bs.wo.z();
 
-
-
-#if 0
                 Float correction_factor = m_vmf_hemisphere.eval(kappa_bs, cosangle, convolution);
                 bsdf_value = select(convolution, bsdf_value * pdf_conv_new_dir / correction_factor, bsdf_value);
 
@@ -623,14 +616,14 @@ public:
                 // Used when convolution is disabled and for MIS
                 Float bsdf_pdf_default = bsdf->pdf(ctx, si, sample_bs.wo, active);
 
-                /* The pdf should be:
-                    - When not using changes of variables, the undetached pdf
-                      because the sample are sampled from the standard pdf
-                    - When using changes of variables and convolution,
-                      the pdf of the main direction (not detached) times
-                      the detached pdf using for sampling the convolution kernel
-                      (always detached pdf because the samples don't move wrt the rotating sampling pdf)
-                    - When not using the convolution, detached pdf */
+                // The pdf should be:
+                // - When not using changes of variables, the undetached pdf
+                //   because the sample are sampled from the standard pdf
+                // - When using changes of variables and convolution,
+                //   the pdf of the main direction (not detached) times
+                //   the detached pdf using for sampling the convolution kernel
+                //   (always detached pdf because the samples don't move wrt the rotating sampling pdf)
+                // - When not using the convolution, detached pdf
                 Float bsdf_pdf = select(convolution,
                                         sample_main_bs.pdf * pdf_conv_new_dir,
                                         bsdf_pdf_default);
@@ -654,38 +647,6 @@ public:
                     current_weight * detach(bsdf_value_pdf[0]) * bsdf_pdf_default / detach(bsdf_pdf_default),
                     current_weight);
                 throughput *= bsdf_value_pdf;
-#else
-                Float correction_factor = m_vmf_hemisphere.eval(kappa_bs, cosangle, active);
-                bsdf_value *= pdf_conv_new_dir / correction_factor;
-
-                // Compute the value of default importance sampling pdf of the BSDF.
-                // Used for MIS
-                Float bsdf_pdf_default = bsdf->pdf(ctx, si, sample_bs.wo, active);
-
-                // The pdf should be:
-                // - When using changes of variables: the pdf of the main direction (not detached) times
-                //   the detached pdf using for sampling the convolution kernel
-                //   (always detached pdf because the samples don't move wrt the rotating sampling pdf)
-                // - When not using changes of variables: the undetached pdf
-                //   because the sample are sampled from the standard pdf
-                Float bsdf_pdf =
-                    sample_main_bs.pdf * select(use_reparam_bs,
-                                                detach(pdf_conv_new_dir),
-                                                pdf_conv_new_dir);
-                Spectrum bsdf_value_pdf = bsdf_value / bsdf_pdf;
-
-                // Compute weights for variance reduction
-                // These weights should be:
-                // - Just 1.f if no change of variable is used
-                // - Weights whose expected gradient is 0 and value is
-                //   close to bsdf_value_pdf.
-                // TODO: these weights should be colors.
-
-                current_weight = select(use_reparam_bs && (bsdf_pdf > 0.001f),
-                    current_weight * detach(bsdf_value_pdf[0]) * pdf_conv_new_dir / detach(pdf_conv_new_dir),
-                    current_weight);
-                throughput *= bsdf_value_pdf;
-#endif
 
                 active &= any(neq(throughput, 0.f));
 

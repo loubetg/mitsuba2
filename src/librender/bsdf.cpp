@@ -13,6 +13,13 @@ MTS_VARIANT Spectrum BSDF<Float, Spectrum>::eval_null_transmission(
     return 0.f;
 }
 
+MTS_VARIANT std::pair<Vector<Float, 3>, Float>
+BSDF<Float, Spectrum>::sample_lobe(const BSDFContext & /*ctx*/,
+                                   const SurfaceInteraction3f &/*si*/,
+                                   Float /*sample1*/, Mask /*active*/) const {
+    NotImplementedError("BSDF::sample_lobe not implemented.");
+}
+
 MTS_VARIANT std::string BSDF<Float, Spectrum>::id() const { return m_id; }
 
 template <typename Index>

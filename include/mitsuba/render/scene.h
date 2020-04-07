@@ -82,6 +82,10 @@ public:
      */
     Mask ray_test(const Ray3f &ray, Mask active = true) const;
 
+
+
+    SurfaceInteraction3f ray_occluder(const Ray3f &ray, Float kappa, Mask active = true) const;
+
     //! @}
     // =============================================================
 
@@ -227,6 +231,8 @@ protected:
     /// Trace a shadow ray
     MTS_INLINE Mask ray_test_cpu(const Ray3f &ray, Mask active) const;
     MTS_INLINE Mask ray_test_gpu(const Ray3f &ray, Mask active) const;
+
+    MTS_INLINE SurfaceInteraction3f ray_occluder_gpu(const Ray3f &ray, Float kappa, Mask active) const;
 
     using ShapeKDTree = mitsuba::ShapeKDTree<Float, Spectrum>;
 

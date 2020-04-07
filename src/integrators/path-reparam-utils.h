@@ -102,7 +102,7 @@ public:
 
     }
 
-    Float eval(float k, Float costheta, mask_t<Float> active) const {
+    Float eval(Float k, Float costheta, mask_t<Float> active) const {
         using UInt32   = uint32_array_t<Float>;
         using Point2u  = Point<UInt32, 2>;
         using Point2f  = Point<Float, 2>;
@@ -111,7 +111,7 @@ public:
 
         Vector2u size(m_t_res, m_k_res);
 
-        Vector2f uv(costheta, mapping_K_U(Float(k)));
+        Vector2f uv(costheta, mapping_K_U(k));
 
         uv = min(uv, 1.f);
         uv = max(uv, 0.f);

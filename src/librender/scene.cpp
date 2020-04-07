@@ -148,6 +148,19 @@ Scene<Float, Spectrum>::ray_test(const Ray3f &ray, Mask active) const {
         return ray_test_cpu(ray, active);
 }
 
+MTS_VARIANT typename Scene<Float, Spectrum>::SurfaceInteraction3f
+Scene<Float, Spectrum>::ray_occluder(const Ray3f &ray, Float kappa, Mask active) const {
+    // MTS_MASKED_FUNCTION(ProfilerPhase::RayTest, active);
+
+    if constexpr (is_cuda_array_v<Float>)
+        return ray_occluder_gpu(ray, kappa, active);
+
+    ENOKI_MARK_USED(ray);
+    ENOKI_MARK_USED(kappa);
+    ENOKI_MARK_USED(active);
+    NotImplementedError("ray_occluder");
+}
+
 MTS_VARIANT std::pair<typename Scene<Float, Spectrum>::EmitterPtr, Float>
 Scene<Float, Spectrum>::sample_emitter(const Interaction3f &/*ref*/,
                                        const Float &sample,

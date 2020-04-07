@@ -1,4 +1,5 @@
 #include <optix_world.h>
+#include "util.h"
 
 using namespace optix;
 
@@ -16,19 +17,6 @@ rtBuffer<float3> vertex_positions;
 rtBuffer<float3> vertex_normals;
 rtBuffer<float2> vertex_texcoords;
 
-__device__ void coordinate_system(float3 n, float3 &x, float3 &y) {
-    /* Based on "Building an Orthonormal Basis, Revisited" by
-       Tom Duff, James Burgess, Per Christensen,
-       Christophe Hery, Andrew Kensler, Max Liani,
-       and Ryusuke Villemin (JCGT Vol 6, No 1, 2017) */
-
-    float s = copysignf(1.f, n.z),
-          a = -1.f / (s + n.z),
-          b = n.x * n.y * a;
-
-    x = make_float3(n.x * n.x * a * s + 1.f, b * s, -n.x * s);
-    y = make_float3(b, s + n.y * n.y * a, -n.y);
-}
 
 RT_PROGRAM void ray_attr() {
     uv = rtGetTriangleBarycentrics();
@@ -48,8 +36,9 @@ RT_PROGRAM void ray_attr() {
 
     p = p0 * b0 + p1 * b1 + p2 * b2;
 
+    ng = normalize(cross(dp0, dp1));
+
     if (fill_surface_interaction == 1) {
-        ng = normalize(cross(dp0, dp1));
         coordinate_system(ng, dp_du, dp_dv);
 
         if (vertex_normals.size() > 0) {

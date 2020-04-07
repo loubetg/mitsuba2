@@ -21,7 +21,7 @@ void __rt_check(RTcontext context, RTresult errval, const char *file, const int 
     }
 }
 
-constexpr size_t kOptixVariableCount = 30;
+constexpr size_t kOptixVariableCount = 31;
 constexpr int kDeviceID = 0;
 
 struct OptixState {
@@ -43,7 +43,7 @@ MTS_VARIANT void Scene<Float, Spectrum>::accel_init_gpu(const Properties &/*prop
     rt_check(rtContextSetDevices(s.context, 1, &devices));
 
     rt_check(rtContextSetRayTypeCount(s.context, 1));
-    rt_check(rtContextSetEntryPointCount(s.context, 2));
+    rt_check(rtContextSetEntryPointCount(s.context, 3));
     rt_check(rtContextSetStackSize(s.context, 0));
     rt_check(rtContextSetMaxTraceDepth(s.context, 1));
     rt_check(rtContextSetMaxCallableProgramDepth(s.context, 0));
@@ -56,7 +56,7 @@ MTS_VARIANT void Scene<Float, Spectrum>::accel_init_gpu(const Properties &/*prop
         "out_ng_y",         "out_ng_z",    "out_ns_x",    "out_ns_y",
         "out_ns_z",         "out_dp_du_x", "out_dp_du_y", "out_dp_du_z",
         "out_dp_dv_x",      "out_dp_dv_y", "out_dp_dv_z", "out_shape_ptr",
-        "out_primitive_id", "out_hit"
+        "out_primitive_id", "out_hit", "in_kappa"
     };
 
     RTvariable var_obj[kOptixVariableCount];
@@ -80,12 +80,15 @@ MTS_VARIANT void Scene<Float, Spectrum>::accel_init_gpu(const Properties &/*prop
     rt_check(rtContextDeclareVariable(s.context, "fill_surface_interaction", &s.fill_surface_interaction));
     rt_check(rtVariableSet1i(s.fill_surface_interaction, 1));
 
-    RTprogram prog[6];
+    RTprogram prog[7];
     rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_rt_ptx,   "ray_gen_closest", &prog[0]));
     rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_rt_ptx,   "ray_gen_any",     &prog[1]));
     rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_rt_ptx,   "ray_miss",        &prog[2]));
     rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_rt_ptx,   "ray_hit",         &prog[3]));
     rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_attr_ptx, "ray_attr",        &prog[4]));
+
+    // TODO: change the indexing here
+    rt_check(rtProgramCreateFromPTXString(s.context, (const char *) optix_rt_ptx, "ray_gen_occluder", &prog[6]));
 
 #if !defined(MTS_OPTIX_DEBUG)
         rt_check(rtContextSetExceptionEnabled(s.context, RT_EXCEPTION_ALL, 0));
@@ -102,10 +105,12 @@ MTS_VARIANT void Scene<Float, Spectrum>::accel_init_gpu(const Properties &/*prop
             }), 3, nullptr));
         rt_check(rtContextSetExceptionProgram(s.context, 0, prog[5]));
         rt_check(rtContextSetExceptionProgram(s.context, 1, prog[5]));
+        rt_check(rtContextSetExceptionProgram(s.context, 2, prog[5]));
 #endif
 
     rt_check(rtContextSetRayGenerationProgram(s.context, 0, prog[0]));
     rt_check(rtContextSetRayGenerationProgram(s.context, 1, prog[1]));
+    rt_check(rtContextSetRayGenerationProgram(s.context, 2, prog[6]));
     rt_check(rtContextSetMissProgram(s.context, 0, prog[2]));
 
     rt_check(rtMaterialCreate(s.context, &s.material));
@@ -183,6 +188,7 @@ Scene<Float, Spectrum>::ray_intersect_gpu(const Ray3f &ray_, HitComputeMode mode
             si = empty<SurfaceInteraction3f>(1); // this is needed for virtual calls
             si.t = empty<Float>(ray_count);
             si.p = empty<Point3f>(ray_count);
+            si.n = empty<Normal3f>(ray_count);
             si.uv = empty<Point2f>(ray_count);
             si.prim_index = empty<UInt32>(ray_count);
             si.shape = empty<ShapePtr>(ray_count);
@@ -246,6 +252,8 @@ Scene<Float, Spectrum>::ray_intersect_gpu(const Ray3f &ray_, HitComputeMode mode
             // Out: Primitive index
             si.prim_index.data(),
             // Out: Hit flag
+            nullptr,
+            // TODO In: kappa,
             nullptr
         };
 
@@ -291,6 +299,7 @@ Scene<Float, Spectrum>::ray_intersect_gpu(const Ray3f &ray_, HitComputeMode mode
         return si;
     } else {
         ENOKI_MARK_USED(ray_);
+        ENOKI_MARK_USED(mode);
         ENOKI_MARK_USED(active);
         Throw("ray_intersect_gpu() should only be called in GPU mode.");
     }
@@ -336,7 +345,9 @@ Scene<Float, Spectrum>::ray_test_gpu(const Ray3f &ray_, Mask active) const {
             // Out: Primitive index
             nullptr,
             // Out: Hit flag
-            hit.data()
+            hit.data(),
+            // TODO In: kappa,
+            nullptr
         };
 
         OptixState &s = *(OptixState *) m_accel;
@@ -366,6 +377,104 @@ Scene<Float, Spectrum>::ray_test_gpu(const Ray3f &ray_, Mask active) const {
         ENOKI_MARK_USED(ray_);
         ENOKI_MARK_USED(active);
         Throw("ray_test_gpu() should only be called in GPU mode.");
+    }
+}
+
+
+MTS_VARIANT typename Scene<Float, Spectrum>::SurfaceInteraction3f
+Scene<Float, Spectrum>::ray_occluder_gpu(const Ray3f &ray_, Float kappa, Mask active) const {
+    if constexpr (is_cuda_array_v<Float>) {
+
+
+        Ray3f ray(ray_);
+        size_t ray_count = std::max(slices(ray.o), slices(ray.d));
+        set_slices(ray, ray_count);
+        set_slices(active, ray_count);
+
+        std::cout << "ray_occluder_gpu -> ray_count: " << ray_count << std::endl;
+
+        // TODO should kappa be scalar?
+        set_slices(kappa, ray_count);
+
+        // TODO should only initialize what's needed
+        SurfaceInteraction3f si = empty<SurfaceInteraction3f>(ray_count);
+
+        // SurfaceInteraction3f si = empty<SurfaceInteraction3f>(1); // this is needed for virtual calls
+        // si.t = empty<Float>(ray_count);
+        // si.p = empty<Point3f>(ray_count);
+        // si.n = empty<Normal3f>(ray_count);
+        // si.uv = empty<Point2f>(ray_count);
+        // si.prim_index = empty<UInt32>(ray_count);
+        // si.shape = empty<ShapePtr>(ray_count);
+
+        cuda_eval();
+
+        const void *cuda_ptr[kOptixVariableCount] = {
+            // Active mask
+            active.data(),
+            // In: ray origin
+            ray.o.x().data(), ray.o.y().data(), ray.o.z().data(),
+            // In: ray direction
+            ray.d.x().data(), ray.d.y().data(), ray.d.z().data(),
+            // In: ray extents
+            ray.mint.data(), ray.maxt.data(),
+            // Out: Distance along ray
+            si.t.data(),
+            // Out: Intersection position
+            si.p.x().data(), si.p.y().data(), si.p.z().data(),
+            // Out: UV coordinates
+            si.uv.x().data(), si.uv.y().data(),
+            // Out: Geometric normal
+            si.n.x().data(), si.n.y().data(), si.n.z().data(),
+            // Out: Shading normal
+            si.sh_frame.n.x().data(), si.sh_frame.n.y().data(), si.sh_frame.n.z().data(),
+            // Out: Texture space derivative (U)
+            si.dp_du.x().data(), si.dp_du.y().data(), si.dp_du.z().data(),
+            // Ovt: Texture space derivative (V)
+            si.dp_dv.x().data(), si.dp_dv.y().data(), si.dp_dv.z().data(),
+            // Out: Shape pointer (on host)
+            si.shape.data(),
+            // Out: Primitive index
+            si.prim_index.data(),
+            // Out: Hit flag
+            nullptr,
+            // TODO In: kappa,
+            kappa.data()
+        };
+
+        OptixState &s = *(OptixState *) m_accel;
+        for (size_t i = 0; i < kOptixVariableCount; ++i) {
+            if (cuda_ptr[i]) {
+                rt_check(rtBufferSetSize1D(s.var_buf[i], ray_count));
+                rt_check(rtBufferSetDevicePointer(s.var_buf[i], kDeviceID, (void *) cuda_ptr[i]));
+            } else {
+                rt_check(rtBufferSetSize1D(s.var_buf[i], 0));
+                rt_check(rtBufferSetDevicePointer(s.var_buf[i], kDeviceID, (void *) 8));
+            }
+        }
+
+        // TODO change this
+        rt_check(rtVariableSet1i(s.fill_surface_interaction, 0));
+
+        // TODO set nb
+
+        RTresult rt = rtContextLaunch1D(s.context, 2, ray_count);
+        if (rt == RT_ERROR_MEMORY_ALLOCATION_FAILED) {
+            cuda_malloc_trim();
+            rt = rtContextLaunch1D(s.context, 2, ray_count);
+        }
+        rt_check(rt);
+
+        si.time = ray.time;
+        si.wavelengths = ray.wavelengths;
+        si.instance = nullptr;
+        si.duv_dx = si.duv_dy = 0.f;
+
+        return si;
+    } else {
+        ENOKI_MARK_USED(ray_);
+        ENOKI_MARK_USED(active);
+        Throw("ray_intersect_gpu() should only be called in GPU mode.");
     }
 }
 

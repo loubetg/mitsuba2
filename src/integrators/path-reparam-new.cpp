@@ -104,12 +104,12 @@ small sample counts in order to fit into GPU memory.
  */
 
 template <typename Float, typename Spectrum>
-class PathReparamIntegrator : public MonteCarloIntegrator<Float, Spectrum> {
+class PathReparamIntegratorNew : public MonteCarloIntegrator<Float, Spectrum> {
 public:
     MTS_IMPORT_BASE(MonteCarloIntegrator, m_max_depth, m_rr_depth)
     MTS_IMPORT_TYPES(Scene, Sampler, Emitter, EmitterPtr, BSDF, BSDFPtr)
 
-    PathReparamIntegrator(const Properties &props) : Base(props) {
+    PathReparamIntegratorNew(const Properties &props) : Base(props) {
         m_dc_light_samples = props.size_("dc_light_samples", 4);
         m_dc_bsdf_samples  = props.size_("dc_bsdf_samples",  4);
         m_dc_cam_samples   = props.size_("dc_cam_samples",   4);
@@ -150,39 +150,36 @@ public:
                                      const RayDifferential3f &primary_ray_,
                                      Float * /*aovs*/,
                                      Mask active_primary) const override {
-
-        RayDifferential3f primary_ray = primary_ray_;
-
-        // Estimate kappa for the convolution of pixel integrals, based on ray
-        // differentials.
-        Float angle = acos(min(dot(primary_ray.d_x, primary_ray.d),
-                               dot(primary_ray.d_y, primary_ray.d)));
-        Float target_mean_cos =
-            min(cos(angle * 0.4f /*arbitrary*/), Float(1.f - 1e-7f));
-
-        // The vMF distribution has an analytic expression for the mean cosine:
-        //                  mean = 1 + 2/(exp(2*k)-1) - 1/k.
-        // For large values of kappa, 1-1/k is a precise approximation of this
-        // function. It can be inverted to find k from the mean cosine.
-        Float kappa_camera = Float(1.f) / (Float(1.f) - target_mean_cos);
-
-        const size_t nb_pimary_rays = slices(primary_ray.d);
-        const UInt32 arange_indices = arange<UInt32>(nb_pimary_rays);
-
-        Spectrum result(0.f);
-
         if constexpr (is_cuda_array_v<Float>) {
+            RayDifferential3f primary_ray = primary_ray_;
+
+            // Estimate kappa for the convolution of pixel integrals, based on ray
+            // differentials.
+            Float angle = acos(min(dot(primary_ray.d_x, primary_ray.d),
+                                   dot(primary_ray.d_y, primary_ray.d)));
+            Float target_mean_cos =
+                min(cos(angle * 0.4f /*arbitrary*/), Float(1.f - 1e-7f));
+
+            // The vMF distribution has an analytic expression for the mean cosine:
+            //                  mean = 1 + 2/(exp(2*k)-1) - 1/k.
+            // For large values of kappa, 1-1/k is a precise approximation of this
+            // function. It can be inverted to find k from the mean cosine.
+            Float kappa_camera = Float(1.f) / (Float(1.f) - target_mean_cos);
+
+            const size_t nb_pimary_rays = slices(primary_ray.d);
+            const UInt32 arange_indices = arange<UInt32>(nb_pimary_rays);
+
+            Spectrum result(0.f);
 
             // ---------------- Convolution of pixel integrals -------------
 
             // Detect discontinuities in a small vMF kernel around each ray.
 
-            std::vector<RayDifferential3f> rays(m_dc_cam_samples);
-            std::vector<SurfaceInteraction3f> sis(m_dc_cam_samples);
-
             Frame<Float> frame_input = Frame<Float>(primary_ray.d);
 
-            Vector3f dir_conv_0, dir_conv_1;
+#if 0
+            std::vector<RayDifferential3f> rays(m_dc_cam_samples);
+            std::vector<SurfaceInteraction3f> sis(m_dc_cam_samples);
 
             // Sample the integrals and gather intersections
             for (size_t cs = 0; cs < m_dc_cam_samples; cs++) {
@@ -195,19 +192,16 @@ public:
                 sis[cs].compute_differentiable_shape_position(active_primary);
 
                 rays[cs] = RayDifferential(primary_ray);
-
-                // Keep two directions for creating pairs of paths.
-                // We choose the last samples since they have less
-                // chances of being used in the estimation of the
-                // discontinuity.
-                if (cs == m_dc_cam_samples - 2)
-                    dir_conv_0 = dir_conv_cs;
-                if (cs == m_dc_cam_samples - 1)
-                    dir_conv_1 = dir_conv_cs;
             }
 
             Point3f discontinuity = estimate_discontinuity(rays, sis, active_primary);
             Vector3f discontinuity_dir = normalize(discontinuity - primary_ray.o);
+#else
+            SurfaceInteraction3f si_occluder = scene->ray_occluder(primary_ray, kappa_camera, active_primary);
+            si_occluder.compute_differentiable_shape_position(active_primary);
+
+            Vector3f discontinuity_dir = normalize(si_occluder.p - primary_ray.o);
+#endif
 
             // The following rotation seems to be the identity transformation, but it actually
             // changes the partial derivatives.
@@ -228,10 +222,10 @@ public:
 
 // #if !REUSE_CAMERA_RAYS
             // Resample two rays. This tends to add bias on silhouettes.
-            dir_conv_0 = frame_input.to_world(
+            Vector3f dir_conv_0 = frame_input.to_world(
                 warp::square_to_von_mises_fisher<Float, Float>(
                     sampler->next_2d(active_primary), kappa_camera));
-            dir_conv_1 = frame_input.to_world(
+            Vector3f dir_conv_1 = frame_input.to_world(
                 warp::square_to_von_mises_fisher<Float, Float>(
                     sampler->next_2d(active_primary), kappa_camera));
 // #endif
@@ -316,10 +310,12 @@ public:
                 if (none(active) || (uint32_t) depth >= (uint32_t) m_max_depth)
                     break;
 
-                // --------------------- Emitter sampling ---------------------
-
                 BSDFContext ctx;
                 BSDFPtr bsdf = si.bsdf(ray);
+
+#if 1
+                // --------------------- Emitter sampling ---------------------
+
                 Mask active_e = active && has_flag(bsdf->flags(), BSDFFlags::Smooth);
 
                 // Sample the light integral at each active shading point.
@@ -492,19 +488,20 @@ public:
                         result += emitter_sampling_1 * 0.5f;
                     }
                 } else {
-                    Throw("PathReparamIntegrator: m_dc_light_samples < 2 not implemented!");
+                    Throw("PathReparamIntegratorNew: m_dc_light_samples < 2 not implemented!");
                 }
+#endif
 
                 // ----------------------- BSDF sampling ----------------------
 
                 Float component_sample = samplePair1D(active, sampler);
 
-                auto [sample_main_bs, bsdf_val_main_bs] = bsdf->sample(ctx, si, component_sample,
-                                                                       samplePair2D(active, sampler), active);
-
-                // TODO: BSDFs should fill the `sampled_roughness` field
-                Mask convolution = Mask(m_use_convolution) && active
-                    && sample_main_bs.sampled_roughness > m_conv_threshold;
+                auto [sample_main_bs, bsdf_val_main_bs] = bsdf->sample(ctx, si, component_sample, samplePair2D(active, sampler), active);
+#if 0
+                // Mask convolution = Mask(m_use_convolution) && active
+                //     && sample_main_bs.sampled_roughness > m_conv_threshold;
+                Mask convolution = Mask(m_use_convolution) && active;
+#endif
 
                 if (any(has_flag(sample_main_bs.sampled_type, BSDFFlags::Delta)))
                     Log(Error, "This pluggin does not support perfectly specular reflections"
@@ -513,22 +510,27 @@ public:
                 active &= sample_main_bs.pdf > 0.f;
 
                 Frame<Float> frame_main_bs(sample_main_bs.wo);
+
+#if 0
+                // Float kappa_bs = 2.f / sqr(sample_main_bs.sampled_roughness);
+                Float kappa_bs = m_kappa_conv;
+
                 std::vector<Vector3f> ds_bs(m_dc_bsdf_samples);
 
                 // Compute directions to samples either from the bsdf or the
                 // convolution of the bsdf. Only the first one is
                 // used for the light paths.
                 for (size_t bs = 0; bs < m_dc_bsdf_samples; bs++) {
-
                     // Convolution: sample a vmf lobe
-                    Vector3f sample_bs = warp::square_to_von_mises_fisher<Float>(sample2D(active, sampler), m_kappa_conv);
+                    Vector3f sample_bs = warp::square_to_von_mises_fisher<Float>(sample2D(active, sampler), kappa_bs);
                     sample_bs = frame_main_bs.to_world(sample_bs);
 
                     // Otherwise: must be uncorrelated, but can sample the same component
-                    auto [sample_bs_noconv, bsdf_val_bs] = bsdf->sample(ctx, si, component_sample,
-                                                                        sample2D(active, sampler), active);
+                    // auto [sample_bs_noconv, bsdf_val_bs] = bsdf->sample(ctx, si, component_sample,
+                                                                        // sample2D(active, sampler), active);
 
-                    ds_bs[bs] = select(convolution, sample_bs, sample_bs_noconv.wo);
+                    // ds_bs[bs] = select(convolution, sample_bs, sample_bs_noconv.wo);
+                    ds_bs[bs] = sample_bs;
                 }
 
                 // Sample all these rays for discontinuity estimation
@@ -544,12 +546,29 @@ public:
                     use_reparam_bs = use_reparam_bs || (active && neq(sis_bs[bs].shape, nullptr));
                 }
 
-                if (m_disable_gradient_diffuse) {
-                    use_reparam_bs &= !convolution;
-                    current_weight = select(use_reparam_bs, current_weight, detach(current_weight));
-                }
+                // if (m_disable_gradient_diffuse) {
+                //     use_reparam_bs &= !convolution;
+                //     current_weight = select(use_reparam_bs, current_weight, detach(current_weight));
+                // }
 
-                Point3f discontinuity_bs = estimate_discontinuity(rays_bs, sis_bs, active);
+                Point3f discontinuity_bs =
+                    estimate_discontinuity(rays_bs, sis_bs, active);
+#else
+                // TODO twick this: make the kernel smaller than the BSDF lobe to reduce noise in render
+                float kernel_lobe_ratio = 2.f;
+                // Prevent the kernel from becoming too big (e.g. diffuse BSDF)
+                Float kappa_bs = max(kernel_lobe_ratio * 2.f / sqr(detach(sample_main_bs.sampled_roughness)), 100);
+                // Float kappa_bs = 0.2f * m_kappa_conv;
+
+                // TODO: try to make kappa depend of the sample_main_bs.pdf (if pdf is low, then kernel should be tighter)
+
+                Ray ray_bs = si.spawn_ray(si.to_world(sample_main_bs.wo));
+                SurfaceInteraction3f si_occluder = scene->ray_occluder(ray_bs, kappa_bs, active);
+                si_occluder.compute_differentiable_shape_position(active);
+                Mask use_reparam_bs = active && si_occluder.is_valid() && neq(si_occluder.shape, nullptr); // TODO remove last part
+                Vector3f discontinuity_bs = si_occluder.p;
+                // cuda_eval(); std::cout << "test 02" << std::endl;
+#endif
 
                 Vector3f direction_diff   = normalize(discontinuity_bs - si.p);
                 Vector3f discontinuity_bs_detach = detach(discontinuity_bs);
@@ -563,31 +582,41 @@ public:
                 // sampled_type do not change since the same component is sampled.
                 BSDFSample3 sample_bs = sample_main_bs;
 
+#if 0
                 // Reuse one direction sampled from either the BSDF or the convolution kernel
                 // around the main direction.
                 sample_bs.wo = ds_bs[0]; // Reuse the first one, could be any of them
-
+#else
+                // Sampled offset direction (see eq 18)
+                sample_bs.wo = frame_main_bs.to_world(
+                    warp::square_to_von_mises_fisher<Float>(
+                        sample2D(active, sampler), kappa_bs));
+#endif
 
                 // Apply the differentiable rotation
                 // Warning, the direction must be detached such that it follows the discontinuities
                 // Warning, this rotation in world space, but wo is in local space
-                sample_bs.wo[use_reparam_bs] = si.to_local(rotation_bs.transform_affine(
-                    si.to_world(detach(sample_bs.wo))));
+                sample_bs.wo[use_reparam_bs] =
+                    si.to_local(rotation_bs.transform_affine(
+                        si.to_world(detach(sample_bs.wo))));
 
                 // Compute the differentiable BSDF value for the differentiable direction
                 Spectrum bsdf_value = bsdf->eval(ctx, si, sample_bs.wo, active);
 
                 // Compute the pdf of the convolution kernel for the selected direction
                 // Warning: need to transform to a frame centered around the Z axis
-                Float pdf_conv_new_dir = warp::square_to_von_mises_fisher_pdf<Float>(frame_main_bs.to_local(sample_bs.wo),
-                                                                                     m_kappa_conv);
+                Float pdf_conv_new_dir =
+                    warp::square_to_von_mises_fisher_pdf<Float>(
+                        frame_main_bs.to_local(sample_bs.wo), kappa_bs);
 
-                // Multiply the BSDF value by the convolution kernel. Use a
-                // correction term for the convolution (otherwise less energy
-                // at grazing angles)
+                // Multiply the BSDF value by the convolution kernel (eq. 18). Use a
+                // correction term for the convolution (otherwise less energy at grazing angles)
                 Float cosangle = sample_bs.wo.z();
-                Float correction_factor = m_vmf_hemisphere.eval(m_kappa_conv, cosangle, convolution);
 
+
+
+#if 0
+                Float correction_factor = m_vmf_hemisphere.eval(kappa_bs, cosangle, convolution);
                 bsdf_value = select(convolution, bsdf_value * pdf_conv_new_dir / correction_factor, bsdf_value);
 
                 // Compute the value of default importance sampling pdf of the BSDF.
@@ -610,11 +639,11 @@ public:
                                                   detach(bsdf_pdf_default));
                 Spectrum bsdf_value_pdf = bsdf_value / bsdf_pdf;
 
-                /* Compute weights for variance reduction
-                   These weights should be:
-                    - just 1 if no change of variable is used
-                    - Weights whose expected gradient is 0 and value is
-                      close to bsdf_value_pdf. */
+                // Compute weights for variance reduction
+                // These weights should be:
+                // - Just 1.f if no change of variable is used
+                // - Weights whose expected gradient is 0 and value is
+                //   close to bsdf_value_pdf.
                 // TODO: these weights should be colors.
 
                 Mask set_weights = use_reparam_bs && (bsdf_pdf > 0.001f);
@@ -625,6 +654,38 @@ public:
                     current_weight * detach(bsdf_value_pdf[0]) * bsdf_pdf_default / detach(bsdf_pdf_default),
                     current_weight);
                 throughput *= bsdf_value_pdf;
+#else
+                Float correction_factor = m_vmf_hemisphere.eval(kappa_bs, cosangle, active);
+                bsdf_value *= pdf_conv_new_dir / correction_factor;
+
+                // Compute the value of default importance sampling pdf of the BSDF.
+                // Used for MIS
+                Float bsdf_pdf_default = bsdf->pdf(ctx, si, sample_bs.wo, active);
+
+                // The pdf should be:
+                // - When using changes of variables: the pdf of the main direction (not detached) times
+                //   the detached pdf using for sampling the convolution kernel
+                //   (always detached pdf because the samples don't move wrt the rotating sampling pdf)
+                // - When not using changes of variables: the undetached pdf
+                //   because the sample are sampled from the standard pdf
+                Float bsdf_pdf =
+                    sample_main_bs.pdf * select(use_reparam_bs,
+                                                detach(pdf_conv_new_dir),
+                                                pdf_conv_new_dir);
+                Spectrum bsdf_value_pdf = bsdf_value / bsdf_pdf;
+
+                // Compute weights for variance reduction
+                // These weights should be:
+                // - Just 1.f if no change of variable is used
+                // - Weights whose expected gradient is 0 and value is
+                //   close to bsdf_value_pdf.
+                // TODO: these weights should be colors.
+
+                current_weight = select(use_reparam_bs && (bsdf_pdf > 0.001f),
+                    current_weight * detach(bsdf_value_pdf[0]) * pdf_conv_new_dir / detach(pdf_conv_new_dir),
+                    current_weight);
+                throughput *= bsdf_value_pdf;
+#endif
 
                 active &= any(neq(throughput, 0.f));
 
@@ -658,7 +719,7 @@ public:
 
             return { result, valid_ray };
         } else {
-            Throw("PathReparamIntegrator: currently this integrator must be run on the GPU.");
+            Throw("PathReparamIntegratorNew: currently this integrator must be run on the GPU.");
             return {Spectrum(0.f), Mask(false)};
         }
     }
@@ -667,7 +728,7 @@ public:
     // =============================================================
 
     std::string to_string() const override {
-        return tfm::format("PathReparamIntegrator[\n"
+        return tfm::format("PathReparamIntegratorNew[\n"
             "  max_depth = %i,\n"
             "  rr_depth = %i\n"
             "]", m_max_depth, m_rr_depth);
@@ -713,7 +774,7 @@ protected:
         unsigned int nb_samples = rays.size();
 
         if (rays.size() < 2 || rays.size() != sis.size())
-            Throw("PathReparamIntegrator::estimate_discontinuity: invalid number of samples for discontinuity estimation");
+            Throw("PathReparamIntegratorNew::estimate_discontinuity: invalid number of samples for discontinuity estimation");
 
         Point3f ray0_p_attached = sis[0].p;
         Vector3f ray0_n = sis[0].n;
@@ -776,7 +837,7 @@ protected:
 
         /* plane_intersection */
 
-#if 1
+#if 0
         // Compute the intersection between 3 planes:
         // 2 planes defined by the ray intersections and
         // the normals at these points, and 1 plane containing
@@ -814,7 +875,6 @@ protected:
 #endif
 
         return res;
-
     }
 
 private:
@@ -833,6 +893,6 @@ private:
     VMFHemisphereIntegral<Float> m_vmf_hemisphere;
 };
 
-MTS_IMPLEMENT_CLASS_VARIANT(PathReparamIntegrator, MonteCarloIntegrator);
-MTS_EXPORT_PLUGIN(PathReparamIntegrator, "Differentiable Path Tracer integrator");
+MTS_IMPLEMENT_CLASS_VARIANT(PathReparamIntegratorNew, MonteCarloIntegrator);
+MTS_EXPORT_PLUGIN(PathReparamIntegratorNew, "Differentiable Path Tracer integrator");
 NAMESPACE_END(mitsuba)

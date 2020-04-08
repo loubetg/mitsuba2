@@ -285,10 +285,9 @@ public:
         return { bs, (F * weight) & active };
     }
 
-    std::pair<Vector<Float, 3>, Float> sample_lobe(const BSDFContext & /*ctx*/,
-                                                   const SurfaceInteraction3f & si,
-                                                   Float /*sample1*/,
-                                                   Mask active) const override {
+    std::pair<Vector<Float, 3>, Float> vmf_approx(const BSDFSample3f & /*bs*/,
+                                                  const SurfaceInteraction3f &si,
+                                                  Mask active) const override {
         if (m_type != MicrofacetType::Beckmann)
             NotImplementedError("Roughconductor::sample_lobe only supports Beckmann.")
 
@@ -296,7 +295,6 @@ public:
         Float alpha = 0.5f * (m_alpha_u->eval_1(si, active) + m_alpha_v->eval_1(si, active));
         Float kappa = 2.f / sqr(alpha);
 
-        // TODO: what should we do with invalid incoming direction?
         return { reflect(si.wi, Normal3f(0.f, 0.f, 1.f)), kappa };
     }
 

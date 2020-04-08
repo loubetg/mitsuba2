@@ -385,27 +385,25 @@ MTS_VARIANT typename Scene<Float, Spectrum>::SurfaceInteraction3f
 Scene<Float, Spectrum>::ray_occluder_gpu(const Ray3f &ray_, Float kappa, Mask active) const {
     if constexpr (is_cuda_array_v<Float>) {
 
-
         Ray3f ray(ray_);
         size_t ray_count = std::max(slices(ray.o), slices(ray.d));
         set_slices(ray, ray_count);
         set_slices(active, ray_count);
 
-        std::cout << "ray_occluder_gpu -> ray_count: " << ray_count << std::endl;
+        // std::cout << "ray_occluder_gpu -> ray_count: " << ray_count << std::endl;
 
-        // TODO should kappa be scalar?
         set_slices(kappa, ray_count);
 
         // TODO should only initialize what's needed
-        SurfaceInteraction3f si = empty<SurfaceInteraction3f>(ray_count);
+        // SurfaceInteraction3f si = empty<SurfaceInteraction3f>(ray_count);
 
-        // SurfaceInteraction3f si = empty<SurfaceInteraction3f>(1); // this is needed for virtual calls
-        // si.t = empty<Float>(ray_count);
-        // si.p = empty<Point3f>(ray_count);
-        // si.n = empty<Normal3f>(ray_count);
-        // si.uv = empty<Point2f>(ray_count);
-        // si.prim_index = empty<UInt32>(ray_count);
-        // si.shape = empty<ShapePtr>(ray_count);
+        SurfaceInteraction3f si = empty<SurfaceInteraction3f>(1);
+        si.t = empty<Float>(ray_count);
+        si.p = empty<Point3f>(ray_count);
+        si.n = empty<Normal3f>(ray_count);
+        si.uv = empty<Point2f>(ray_count);
+        si.prim_index = empty<UInt32>(ray_count);
+        si.shape = empty<ShapePtr>(ray_count);
 
         cuda_eval();
 
@@ -427,11 +425,11 @@ Scene<Float, Spectrum>::ray_occluder_gpu(const Ray3f &ray_, Float kappa, Mask ac
             // Out: Geometric normal
             si.n.x().data(), si.n.y().data(), si.n.z().data(),
             // Out: Shading normal
-            si.sh_frame.n.x().data(), si.sh_frame.n.y().data(), si.sh_frame.n.z().data(),
+            nullptr, nullptr, nullptr,
             // Out: Texture space derivative (U)
-            si.dp_du.x().data(), si.dp_du.y().data(), si.dp_du.z().data(),
+            nullptr, nullptr, nullptr,
             // Ovt: Texture space derivative (V)
-            si.dp_dv.x().data(), si.dp_dv.y().data(), si.dp_dv.z().data(),
+            nullptr, nullptr, nullptr,
             // Out: Shape pointer (on host)
             si.shape.data(),
             // Out: Primitive index

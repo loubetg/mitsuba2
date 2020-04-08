@@ -14,9 +14,9 @@ MTS_VARIANT Spectrum BSDF<Float, Spectrum>::eval_null_transmission(
 }
 
 MTS_VARIANT std::pair<Vector<Float, 3>, Float>
-BSDF<Float, Spectrum>::sample_lobe(const BSDFContext & /*ctx*/,
-                                   const SurfaceInteraction3f &/*si*/,
-                                   Float /*sample1*/, Mask /*active*/) const {
+BSDF<Float, Spectrum>::vmf_approx(const BSDFSample3f & /*bs*/,
+                                  const SurfaceInteraction3f & /*si*/,
+                                  Mask /*active*/) const {
     NotImplementedError("BSDF::sample_lobe not implemented.");
 }
 

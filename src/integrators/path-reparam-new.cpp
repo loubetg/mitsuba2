@@ -313,7 +313,6 @@ public:
                 BSDFContext ctx;
                 BSDFPtr bsdf = si.bsdf(ray);
 
-#if 1
                 // --------------------- Emitter sampling ---------------------
 
                 Mask active_e = active && has_flag(bsdf->flags(), BSDFFlags::Smooth);
@@ -329,6 +328,35 @@ public:
                 Point3f position_discontinuity(0.f);
                 UInt32 hits(0);
 
+
+#if 0
+                // Sample "main" direction
+                auto [ds_ls_main, _] = emitter->sample_direction(si, samplePair2D(active_e, sampler), active_e);
+
+                auto emitter_bsphere = emitter->bbox().bounding_sphere();
+                // TODO: compute projected kappa
+                Float projected_kappa = 200;
+
+                // Choose whether to do the convolution based on projected kappa
+                Mask convolution = false;
+
+
+                // No convolution case:
+
+                Vector3f dir_to_center = normalize(emitter_bsphere.center - si.p);
+
+                Float kappa_ls      = select(convolution, m_kappa_conv, projected_kappa);
+                Vector3f sample_dir = select(convolution, ds_ls_main.d, dir_to_center);
+
+                Ray ray_ls = si.spawn_ray(sample_dir);
+                ray_ls.maxt = ds_ls_main.dist * (1.f - math::ShadowEpsilon<Float>); // TODO check this
+
+
+                SurfaceInteraction3f si_occluder = scene->ray_occluder(ray_ls, kappa_ls, active);
+                si_occluder.compute_differentiable_shape_position(active);
+                Mask use_reparam_bs = active && si_occluder.is_valid();
+                Vector3f discontinuity_bs = si_occluder.p;
+#else
                 std::vector<DirectionSample3f> ds_ls(m_dc_light_samples);
                 std::vector<Spectrum> emitter_val_ls(m_dc_light_samples);
                 std::vector<Mask> is_occluded_ls(m_dc_light_samples);
@@ -497,7 +525,7 @@ public:
                 Float component_sample = samplePair1D(active, sampler);
 
                 auto [sample_main_bs, bsdf_val_main_bs] = bsdf->sample(ctx, si, component_sample, samplePair2D(active, sampler), active);
-                auto [bs_lobe_dir, bs_lobe_kappa] = bsdf->sample_lobe(ctx, si, component_sample, active);
+                auto [bs_lobe_dir, bs_lobe_kappa] = bsdf->vmf_approx(sample_main_bs, si, active);
 
                 Mask convolution = Mask(m_use_convolution) && active
                                    && bs_lobe_kappa < (2.f / sqr(m_conv_threshold)); // TODO threshold in kappa

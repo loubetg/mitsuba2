@@ -102,10 +102,9 @@ public:
         return { bs, select(active && bs.pdf > 0.f, unpolarized<Spectrum>(value), 0.f) };
     }
 
-    std::pair<Vector<Float, 3>, Float> sample_lobe(const BSDFContext & /*ctx*/,
-                                                   const SurfaceInteraction3f & /*si*/,
-                                                   Float /*sample1*/,
-                                                   Mask /*active*/) const override {
+    std::pair<Vector<Float, 3>, Float> vmf_approx(const BSDFSample3f & /*bs*/,
+                                                  const SurfaceInteraction3f & /*si*/,
+                                                  Mask /*active*/) const override {
         return { Vector3f(0.f, 0.f, 1.f), math::Infinity<Float> };
     }
 

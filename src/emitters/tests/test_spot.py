@@ -100,7 +100,7 @@ def test_sample_direction(variant_scalar_spectral, spectrum_key, it_pos, wavelen
 def test_sample_ray(variant_packet_spectral, spectrum_key, wavelength_sample, pos_sample, cutoff_angle, lookat):
     # Check the correctness of the sample_ray() method
 
-    from mitsuba.core import warp, sample_shifted, Transform4f
+    from mitsuba.core import warp, sample_shifted, Transform4f, Vector3f
     from mitsuba.render import SurfaceInteraction3f
 
     cutoff_angle_rad = cutoff_angle / 180 * ek.pi
@@ -140,7 +140,7 @@ def test_sample_ray(variant_packet_spectral, spectrum_key, wavelength_sample, po
     assert ek.all(local_dir.z >= cos_cutoff_angle_rad)
     assert ek.allclose(ray.wavelengths, wav)
     assert ek.allclose(ray.d, trafo.transform_vector(local_dir))
-    assert ek.allclose(ray.o, lookat.transform_point(0))
+    assert ek.allclose(ray.o, Vector3f(lookat.transform_point(0)))
 
 
 @pytest.mark.parametrize("spectrum_key", spectrum_strings.keys())

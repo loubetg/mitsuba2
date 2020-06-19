@@ -322,7 +322,7 @@ Shape<Float, Spectrum>::ray_intersect(const Ray3f &ray, Mask active) const {
     si.t = select(active, t,  math::Infinity<Float>);
 
     if (any(active))
-        si = fill_surface_interaction(ray, cache, arange<UInt32>(slices(ray)), si, active);
+        si = fill_surface_interaction(ray, cache, arange<UInt32>(slices(t)), si, active);
     return si;
 }
 

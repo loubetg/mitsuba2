@@ -251,7 +251,7 @@ struct SurfaceInteraction : Interaction<Float_, Spectrum_> {
         ShapePtr target = select(neq(instance, nullptr), instance, shape);
 
         auto si = target->fill_surface_interaction(ray, (Float *) cache,
-                                                   arange<UInt32>(slices(ray)),
+                                                   arange<UInt32>(slices(target)),
                                                    *this, is_valid() && active);
 
         // Keep this->t == INF if interaction isn't valid

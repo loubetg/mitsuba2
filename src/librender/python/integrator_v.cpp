@@ -96,11 +96,12 @@ void bind_integrator_sample(Class &integrator) {
             Spectrum result_spec;
             Mask result_mask;
 
-            set_slices(result_spec, slices(ray));
-            set_slices(result_mask, slices(ray));
-            set_slices(active, slices(ray));
+            size_t ray_count = std::max(slices(ray.o), slices(ray.d));
+            set_slices(result_spec, ray_count);
+            set_slices(result_mask, ray_count);
+            set_slices(active, ray_count);
             for (size_t j = 0; j < result_aovs.size(); ++j)
-                set_slices(result_aovs[j], slices(ray));
+                set_slices(result_aovs[j], ray_count);
 
             for (size_t i = 0; i < packets(ray); ++i) {
                 auto [spec, mask] = integrator->sample(scene, sampler, packet(ray, i), medium,
